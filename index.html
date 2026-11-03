@@ -527,6 +527,8 @@ const IC = {
   r:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>',
   dl:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg>',
   cam:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>',
+  ok:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>',
+  reab:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12a8 8 0 1 0 2.4-5.7M4 4v5h5"/></svg>',
   star:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1L3.2 9.5l6.1-.9z"/></svg>'
 };
 
@@ -696,6 +698,7 @@ function fotosDe(acts){ const out=[]; acts.forEach(a=>(a.fotos||[]).forEach(f=>o
 
 function vistaDetalle(sinAnim){
   const r=S.actual, e=r.estacion||{};
+  const abierto=r.estado!=='terminado';
   document.title=(e.nombre||'Reporte')+' | Reportes de servicio';
   const C=2*Math.PI*62, av=r.avance||0;
   const total=fotosDe(S.acts).length;
@@ -723,11 +726,13 @@ function vistaDetalle(sinAnim){
         </div>
       </div>
       <div class="hero-actions">
-        <button class="btn btn-red" type="button" id="bFotosHoy">${IC.cam} Subir fotos de hoy</button>
-        <button class="btn btn-glass" type="button" id="bAct">${IC.plus} Nota</button>
-        ${puedeRep(r)?`<button class="btn btn-glass" type="button" id="bEdit">${IC.edit} Editar datos</button>`:''}
+        ${abierto?`<button class="btn btn-red" type="button" id="bFotosHoy">${IC.cam} Subir fotos de hoy</button>
+        <button class="btn btn-glass" type="button" id="bAct">${IC.plus} Nota</button>`:''}
+        ${abierto&&puedeRep(r)?`<button class="btn btn-glass" type="button" id="bEdit">${IC.edit} Editar datos</button>`:''}
+        ${abierto&&puedeRep(r)?`<button class="btn btn-glass" type="button" id="bFin">${IC.ok} Finalizar reporte</button>`:''}
+        ${!abierto&&S.admin?`<button class="btn btn-glass" type="button" id="bReab">${IC.reab} Reabrir reporte</button>`:''}
         <button class="btn btn-glass" type="button" id="bShare">${IC.share} Compartir</button>
-        ${puedeRep(r)?`<button class="btn btn-glass" type="button" id="bDel">${IC.del} Borrar</button>`:''}
+        ${abierto&&puedeRep(r)?`<button class="btn btn-glass" type="button" id="bDel">${IC.del} Borrar</button>`:''}
       </div>
     </div>
   </section>
@@ -744,6 +749,7 @@ function vistaDetalle(sinAnim){
         ${r.responsable?`<div><dt>Responsable</dt><dd>${esc(r.responsable)}</dd></div>`:''}
         <div><dt>Inicio</dt><dd>${fLarga(r.fecha_inicio)}</dd></div>
         ${r.fecha_fin?`<div><dt>Término</dt><dd>${fLarga(r.fecha_fin)}</dd></div>`:''}
+        ${r.finalizado_por?`<div><dt>Finalizado por</dt><dd>${esc(r.finalizado_por)}</dd></div>`:''}
       </dl>
       ${r.descripcion?`<div class="desc">${esc(r.descripcion)}</div>`:''}
       <div class="resumen"><div><b>${dias}</b><span>días con avance</span></div><div><b>${S.acts.length}</b><span>registros</span></div><div><b>${total}</b><span>fotos</span></div></div>
@@ -753,14 +759,16 @@ function vistaDetalle(sinAnim){
       <div id="tl"></div>
     </div>
   </section>
-  <button class="btn btn-red fab" type="button" id="fabAct">${IC.cam} Fotos de hoy</button>`;
+  ${abierto?`<button class="btn btn-red fab" type="button" id="fabAct">${IC.cam} Fotos de hoy</button>`:''}`;
 
   if(!sinAnim) requestAnimationFrame(()=>requestAnimationFrame(()=>{
     const fg=$('#ringFg'); if(fg) fg.style.strokeDashoffset=C*(1-av/100);
     contar($('#ringNum'), av);
   }));
-  $('#bAct').onclick=()=>abrirDlgAct();
-  $('#bFotosHoy').onclick=$('#fabAct').onclick=()=>pedirFotos({fecha:hoy()});
+  if($('#bAct')) $('#bAct').onclick=()=>abrirDlgAct();
+  if($('#bFotosHoy')) $('#bFotosHoy').onclick=$('#fabAct').onclick=()=>pedirFotos({fecha:hoy()});
+  if($('#bFin')) $('#bFin').onclick=finalizarReporte;
+  if($('#bReab')) $('#bReab').onclick=reabrirReporte;
   if(matchMedia('(max-width:600px)').matches) $('#ficha').open=false;
   $('#ficha').querySelector('summary').addEventListener('click',e=>{ if(!matchMedia('(max-width:600px)').matches) e.preventDefault(); });
   if($('#bEdit')) $('#bEdit').onclick=()=>abrirDlgReporte(S.actual);
@@ -780,9 +788,11 @@ function pintarTimeline(animar){
   const tl=$('#tl'); if(!tl) return;
   const acts=S.acts.filter(a=>!S.etapa||a.etapa===S.etapa);
   if(!acts.length){
+    if(S.actual.estado==='terminado'){ tl.innerHTML=`<div class="vacio"><h2>Reporte finalizado</h2><p>Este reporte se cerró sin evidencia registrada.</p></div>`; return; }
     tl.innerHTML=`<div class="vacio"><h2>Sin evidencia todavía</h2><p>Sube las fotos del primer día: el estado inicial del equipo y el desmonte.</p><button class="btn btn-red" type="button" id="vAct">${IC.cam} Subir fotos de hoy</button></div>`;
     $('#vAct').onclick=()=>pedirFotos({fecha:hoy()}); return;
   }
+  const abierto=S.actual.estado!=='terminado';
   const grupos=[]; acts.forEach(a=>{ let g=grupos.find(x=>x.f===a.fecha); if(!g){ g={f:a.fecha,items:[]}; grupos.push(g);} g.items.push(a); });
   let i=0;
   const faltaHoy = S.actual.estado!=='terminado' && !S.acts.some(a=>a.fecha===hoy());
@@ -795,7 +805,7 @@ function pintarTimeline(animar){
         const f=a.fotos||[];
         return `<article class="act${animar?' reveal':''}" style="--i:${i++}">
           <header><span class="tipo t-${esc(a.tipo)}">${TIPOS[a.tipo]?.t||esc(a.tipo)}</span>${a.etapa?`<span class="etapa">${esc(a.etapa)}</span>`:''}<span class="grow"></span>
-            ${puedeAct(a)?`<button class="mini" type="button" data-addf="${a.id}">${IC.cam} Agregar fotos</button>
+            ${abierto&&puedeAct(a)?`<button class="mini" type="button" data-addf="${a.id}">${IC.cam} Agregar fotos</button>
             <button class="icon-btn" type="button" data-ed="${a.id}" aria-label="Editar">${IC.edit}</button>
             <button class="icon-btn" type="button" data-del="${a.id}" aria-label="Borrar">${IC.del}</button>`:''}</header>
           ${a.titulo?`<h3>${esc(a.titulo)}</h3>`:''}
@@ -803,7 +813,7 @@ function pintarTimeline(animar){
           ${f.length?`<div class="fotos${f.length>=3?' many':''}">${f.map((x,k)=>`<button type="button" data-ph="${a.id}" data-k="${k}"><img src="${esc(x.url)}" alt="${esc(x.caption||a.titulo||'Foto')}" loading="lazy">${x.caption?`<span>${esc(x.caption)}</span>`:''}</button>`).join('')}</div>`:''}
           <footer>${a.autor?`<span>Reportó ${esc(a.autor)}</span>`:''}${a.avance!=null?`<span>Avance ${a.avance}%</span>`:''}${f.length?`<span>${f.length} foto${f.length>1?'s':''}</span>`:''}</footer>
         </article>`; }).join('')}
-        <button class="mas-dia" type="button" data-dia="${g.f}">${IC.cam} Agregar fotos al ${esc(fLarga(g.f))}</button></div>
+        ${abierto?`<button class="mas-dia" type="button" data-dia="${g.f}">${IC.cam} Agregar fotos al ${esc(fLarga(g.f))}</button>`:''}</div>
     </div>`;
   }).join('');
   if($('#bBanner')) $('#bBanner').onclick=()=>pedirFotos({fecha:hoy()});
@@ -916,6 +926,7 @@ $('#btnGuardarRep').onclick=async()=>{
     estacion_id:e.id||null, estacion:{nombre:e.nombre,comercial:e.comercial||'',razon:e.razon||'',permiso:e.permiso||'',numero:e.numero||'',direccion:e.direccion||'',colonia:e.colonia||'',ciudad:e.ciudad||'',estado:e.estado||'',marca:e.marca||'',encargado:e.encargado||'',zona:e.zona||''},
     updated_at:new Date().toISOString()};
   if(row.estado==='terminado' && !S.editRep?.fecha_fin) row.fecha_fin=hoy();
+  if(row.estado==='terminado' && !S.editRep?.finalizado_por){ row.finalizado_por=S.user?.email||null; row.finalizado_at=new Date().toISOString(); }
   const b=$('#btnGuardarRep'); b.disabled=true; $('#repMsg').textContent='Guardando…';
   try{
     if(S.editRep){
@@ -940,6 +951,25 @@ async function borrarReporte(){
     if(!dd||!dd.length) throw new Error('No tienes permiso para borrar este reporte');
     toast('Reporte borrado'); location.hash='';
   }catch(err){ toast('No se pudo borrar: '+errTxt(err), true); }
+}
+
+async function cambiarCierre(cambios, okMsg){
+  const id=S.actual.id;
+  try{
+    const {data:dd,error}=await sb.from('reportes_servicio').update({...cambios, updated_at:new Date().toISOString()}).eq('id',id).select('id');
+    if(error) throw error;
+    if(!dd||!dd.length) throw new Error('No tienes permiso para modificar este reporte');
+    toast(okMsg); await abrirReporte(id,true);
+  }catch(err){ toast('No se pudo guardar: '+errTxt(err), true); }
+}
+function finalizarReporte(){
+  const r=S.actual;
+  if(!confirm(`¿Finalizar el reporte ${r.folio||''} de ${r.estacion?.nombre||''}? Quedará como Terminado al 100% y ya no se podrán agregar fotos ni notas.`)) return;
+  cambiarCierre({estado:'terminado', avance:100, fecha_fin:r.fecha_fin||hoy(), finalizado_por:S.user?.email||null, finalizado_at:new Date().toISOString()}, 'Reporte finalizado');
+}
+function reabrirReporte(){
+  if(!confirm('¿Reabrir este reporte? Volverá a En proceso y se podrán agregar fotos y notas.')) return;
+  cambiarCierre({estado:'en_proceso', fecha_fin:null, finalizado_por:null, finalizado_at:null}, 'Reporte reabierto');
 }
 
 async function compartir(){
@@ -1121,7 +1151,14 @@ $('#formLogin').addEventListener('submit',async e=>{
   const mail=$('#lgMail').value.trim(), pass=$('#lgPass').value;
   if(!mail||!pass){ mostrarErr('Escribe tu correo y contraseña.'); return; }
   const b=$('#btnEntrar'); b.disabled=true; b.textContent='Entrando…';
-  const {data,error}=await sb.auth.signInWithPassword({email:mail,password:pass});
+  let {data,error}=await sb.auth.signInWithPassword({email:mail,password:pass});
+  if(error && /invalid/i.test(error.message)){
+    // Respaldo: valida contra la contraseña del portal y sincroniza la cuenta (auth-migrar)
+    try{
+      const m=await sb.functions.invoke('auth-migrar',{body:{email:mail,password:pass}});
+      if(!m.error && m.data && m.data.ok) ({data,error}=await sb.auth.signInWithPassword({email:mail,password:pass}));
+    }catch(e){}
+  }
   if(error){ b.disabled=false; b.textContent='Entrar';
     mostrarErr(/invalid/i.test(error.message)?'Correo o contraseña incorrectos.':(/fetch|network/i.test(error.message)?'Sin conexión. Revisa tu internet e intenta de nuevo.':error.message)); return; }
   $('#lgPass').value=''; entrar(data.user);
