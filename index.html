@@ -731,6 +731,7 @@ function vistaDetalle(sinAnim){
         ${abierto&&puedeRep(r)?`<button class="btn btn-glass" type="button" id="bEdit">${IC.edit} Editar datos</button>`:''}
         ${abierto&&puedeRep(r)?`<button class="btn btn-glass" type="button" id="bFin">${IC.ok} Finalizar reporte</button>`:''}
         ${!abierto&&S.admin?`<button class="btn btn-glass" type="button" id="bReab">${IC.reab} Reabrir reporte</button>`:''}
+        <button class="btn btn-glass" type="button" id="bPdf">${IC.dl} PDF</button>
         <button class="btn btn-glass" type="button" id="bShare">${IC.share} Compartir</button>
         ${abierto&&puedeRep(r)?`<button class="btn btn-glass" type="button" id="bDel">${IC.del} Borrar</button>`:''}
       </div>
@@ -773,6 +774,7 @@ function vistaDetalle(sinAnim){
   $('#ficha').querySelector('summary').addEventListener('click',e=>{ if(!matchMedia('(max-width:600px)').matches) e.preventDefault(); });
   if($('#bEdit')) $('#bEdit').onclick=()=>abrirDlgReporte(S.actual);
   $('#bShare').onclick=compartir;
+  $('#bPdf').onclick=descargarPDF;
   if($('#bDel')) $('#bDel').onclick=borrarReporte;
   app.querySelectorAll('[data-e]').forEach(b=>b.onclick=()=>{ S.etapa=b.dataset.e||null; app.querySelectorAll('[data-e]').forEach(x=>x.setAttribute('aria-pressed',x===b)); pintarTimeline(true); });
   pintarTimeline(!sinAnim);
@@ -970,6 +972,192 @@ function finalizarReporte(){
 function reabrirReporte(){
   if(!confirm('¿Reabrir este reporte? Volverá a En proceso y se podrán agregar fotos y notas.')) return;
   cambiarCierre({estado:'en_proceso', fecha_fin:null, finalizado_por:null, finalizado_at:null}, 'Reporte reabierto');
+}
+
+/* ---------- PDF ---------- */
+let jspdfCarga=null;
+function cargarJsPDF(){
+  if(window.jspdf) return Promise.resolve();
+  return jspdfCarga ||= new Promise((ok,mal)=>{
+    const sc=document.createElement('script');
+    sc.src='https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js';
+    sc.onload=ok; sc.onerror=()=>{ jspdfCarga=null; mal(new Error('no cargó el generador de PDF, revisa tu internet')); };
+    document.head.appendChild(sc);
+  });
+}
+async function fotoPDF(url){
+  try{
+    const res=await fetch(url,{mode:'cors'}); if(!res.ok) throw new Error('foto');
+    const bmp=await createImageBitmap(await res.blob(),{imageOrientation:'from-image'});
+    const W=960,H=720,c=document.createElement('canvas'); c.width=W; c.height=H;
+    const g=c.getContext('2d'); g.fillStyle='#F6F8FC'; g.fillRect(0,0,W,H);
+    const k=Math.min(W/bmp.width,H/bmp.height), w=bmp.width*k, h=bmp.height*k;
+    g.drawImage(bmp,(W-w)/2,(H-h)/2,w,h);
+    return c.toDataURL('image/jpeg',.8);
+  }catch(e){ return null; }
+}
+const txtPDF = s => String(s??'').replace(/[^\x09\x0A\x0D\x20-\x7E\u00A0-\u00FF\u2013\u2014\u2018\u2019\u201C\u201D\u2022\u2026]/g,'');
+
+function crearPDF(r,e,acts,img,logo){
+  const {jsPDF}=window.jspdf;
+  const doc=new jsPDF({unit:'mm',format:'a4',compress:true});
+  doc.setLineHeightFactor(1.25);
+  const PW=210,PH=297,M=15,CW=PW-2*M,PIE=PH-17;
+  const C={navy:[29,46,115],deep:[14,24,64],red:[231,64,43],ink:[20,26,51],muted:[91,99,133],line:[214,219,232],soft:[246,248,252],claro:[220,225,245],white:[255,255,255]};
+  const T=txtPDF, PT=0.3528;
+  const fill=k=>doc.setFillColor(...C[k]), draw=k=>doc.setDrawColor(...C[k]);
+  const fuente=(peso,tam,col)=>{ doc.setFont('helvetica',peso); doc.setFontSize(tam); doc.setTextColor(...C[col]); };
+  const lh=tam=>tam*PT*1.25;
+  const partir=(txt,tam,w,peso)=>{ doc.setFont('helvetica',peso||'normal'); doc.setFontSize(tam); return doc.splitTextToSize(T(txt),w); };
+  let y=0;
+
+  function encabezado(){
+    if(logo){ try{ doc.addImage(logo,'PNG',M,9,40,11.84); }catch(_){} }
+    fuente('bold',9,'navy'); doc.text('REPORTE DE SERVICIO',PW-M,13.5,{align:'right'});
+    fuente('normal',8.5,'muted'); doc.text(T(r.folio||''),PW-M,18.5,{align:'right'});
+    fill('red'); doc.rect(M,23,CW,0.9,'F');
+    y=31;
+  }
+  function cabe(h){ if(y+h>PIE){ doc.addPage(); encabezado(); return true; } return false; }
+  function parrafo(txt,tam,col,peso,x,w){
+    x=x??M; w=w??CW;
+    partir(txt,tam,w,peso).forEach(l=>{ cabe(lh(tam)); fuente(peso||'normal',tam,col); doc.text(l,x,y+tam*PT); y+=lh(tam); });
+  }
+  function seccion(t){
+    cabe(16);
+    fill('red'); doc.rect(M,y,1.4,5.6,'F');
+    fuente('bold',12,'navy'); doc.text(T(t).toUpperCase(),M+4.5,y+4.5);
+    y+=10;
+  }
+
+  encabezado();
+
+  /* Portada: franja con estación y trabajo */
+  const fin=r.estado==='terminado', anchoTxt=CW-16-(fin?36:0);
+  const nom=partir(e.nombre||'Estación',20,anchoTxt,'bold');
+  const tit=r.titulo?partir(r.titulo,11,anchoTxt):[];
+  const hb=12+nom.length*lh(20)+tit.length*lh(11)+10;
+  fill('deep'); doc.rect(M,y,CW,hb,'F'); fill('red'); doc.rect(M,y,2.4,hb,'F');
+  let yy=y+11;
+  fuente('bold',20,'white'); doc.text(nom,M+8,yy); yy+=nom.length*lh(20)-1;
+  if(tit.length){ fuente('normal',11,'claro'); doc.text(tit,M+8,yy+1); }
+  const chips=[ESTADOS[r.estado]||r.estado, r.tipo_trabajo, e.marca].filter(Boolean).map(T).join('   •   ');
+  fuente('bold',8.5,'red'); doc.text(chips.toUpperCase(),M+8,y+hb-5);
+  if(fin){
+    draw('red'); doc.setLineWidth(0.6); doc.roundedRect(PW-M-38,y+6,32,10,1.5,1.5,'S');
+    fuente('bold',9.5,'red'); doc.text('FINALIZADO',PW-M-22,y+12.4,{align:'center'});
+  }
+  y+=hb+6;
+
+  /* Resumen */
+  const nf=acts.reduce((s,a)=>s+(a.fotos||[]).length,0);
+  const caja=[[ (r.avance||0)+'%','Avance'],[String(new Set(acts.map(a=>a.fecha)).size),'Días con avance'],[String(acts.length),'Registros'],[String(nf),'Fotos']];
+  const bw=(CW-12)/4, bh=17;
+  caja.forEach(([v,l],i)=>{
+    const x=M+i*(bw+4);
+    fill('soft'); doc.rect(x,y,bw,bh,'F'); fill(i===0?'red':'navy'); doc.rect(x,y,bw,0.9,'F');
+    fuente('bold',16,i===0?'red':'navy'); doc.text(v,x+bw/2,y+9.5,{align:'center'});
+    fuente('normal',7.5,'muted'); doc.text(T(l).toUpperCase(),x+bw/2,y+14,{align:'center'});
+  });
+  y+=bh+9;
+
+  /* Datos */
+  seccion('Datos de la estación');
+  const datos=[['Nombre comercial',e.comercial||e.marca],['Permiso CRE',e.permiso],['No. de estación',e.numero],['Razón social',e.razon],
+    ['Ubicación',[e.direccion,e.colonia,e.ciudad,e.estado].filter(Boolean).join(', ')],['Encargado de zona',e.encargado?(e.encargado+(e.zona?' ('+e.zona+')':'')):''],
+    ['Responsable',r.responsable],['Fecha de inicio',r.fecha_inicio?fLarga(r.fecha_inicio):''],['Fecha de término',r.fecha_fin?fLarga(r.fecha_fin):''],['Finalizado por',r.finalizado_por]
+  ].filter(x=>x[1]);
+  const colW=(CW-10)/2;
+  for(let i=0;i<datos.length;i+=2){
+    const fila=datos.slice(i,i+2).map(([l,v])=>({l,v:partir(v,10,colW)}));
+    const h=5+Math.max(...fila.map(f=>f.v.length))*lh(10)+2.5;
+    cabe(h);
+    fila.forEach((f,k)=>{ const x=M+k*(colW+10);
+      fuente('bold',7,'muted'); doc.text(T(f.l).toUpperCase(),x,y+2.6);
+      fuente('normal',10,'ink'); doc.text(f.v,x,y+5+10*PT); });
+    y+=h; draw('line'); doc.setLineWidth(0.2); doc.line(M,y-1.2,M+CW,y-1.2); y+=1.5;
+  }
+  y+=4;
+
+  if(r.descripcion){ seccion('Alcance del trabajo'); parrafo(r.descripcion,10,'ink'); y+=6; }
+
+  /* Bitácora */
+  seccion('Bitácora de trabajo');
+  if(!acts.length) parrafo('Sin registros de avance.',10,'muted');
+  const grupos=[]; acts.forEach(a=>{ let g=grupos.find(x=>x.f===a.fecha); if(!g){ g={f:a.fecha,items:[]}; grupos.push(g);} g.items.push(a); });
+  const fw=(CW-8)/3, fh=fw*0.75;
+  grupos.forEach(g=>{
+    cabe(30);
+    const d=fecha(g.f); let dt=d?d.toLocaleDateString('es-MX',{weekday:'long',day:'numeric',month:'long',year:'numeric'}):String(g.f);
+    dt=dt.charAt(0).toUpperCase()+dt.slice(1);
+    fill('navy'); doc.rect(M,y,CW,7.5,'F'); fill('red'); doc.rect(M,y,1.6,7.5,'F');
+    fuente('bold',9.5,'white'); doc.text(T(dt),M+5,y+5.1);
+    fuente('normal',8,'claro'); doc.text(g.items.length+(g.items.length>1?' registros':' registro'),PW-M-3,y+5.1,{align:'right'});
+    y+=11.5;
+    g.items.forEach(a=>{
+      cabe(18);
+      const tipo=T(TIPOS[a.tipo]?.t||a.tipo||'').toUpperCase();
+      fuente('bold',7.5,'red'); doc.text(tipo,M,y+2.8);
+      if(a.etapa){ const w=doc.getTextWidth(tipo); fuente('normal',8,'muted'); doc.text(T('  |  '+a.etapa),M+w,y+2.8); }
+      y+=5;
+      if(a.titulo){ parrafo(a.titulo,11,'ink','bold'); y+=0.5; }
+      if(a.descripcion){ parrafo(a.descripcion,9.5,'muted'); }
+      const f=a.fotos||[];
+      const meta=[a.autor?'Reportó '+a.autor:'', a.avance!=null?'Avance '+a.avance+'%':'', f.length?f.length+(f.length>1?' fotos':' foto'):''].filter(Boolean).join('   •   ');
+      if(meta){ y+=0.5; parrafo(meta,8,'muted'); }
+      if(f.length){
+        y+=2;
+        for(let i=0;i<f.length;i+=3){
+          const fila=f.slice(i,i+3), conPie=fila.some(x=>x.caption);
+          cabe(fh+(conPie?6:2));
+          fila.forEach((ft,k)=>{
+            const x=M+k*(fw+4), im=img.get(ft);
+            if(im){ doc.addImage(im,'JPEG',x,y,fw,fh,undefined,'FAST'); }
+            else { fill('soft'); doc.rect(x,y,fw,fh,'F'); fuente('normal',8,'muted'); doc.text('Foto no disponible',x+fw/2,y+fh/2,{align:'center'}); }
+            draw('line'); doc.setLineWidth(0.2); doc.rect(x,y,fw,fh,'S');
+            if(ft.caption){ const c=partir(ft.caption,7.5,fw)[0]||''; fuente('normal',7.5,'muted'); doc.text(c,x,y+fh+3.6); }
+          });
+          y+=fh+(conPie?6:3);
+        }
+      }
+      y+=2; draw('line'); doc.setLineWidth(0.2); doc.line(M,y,M+CW,y); y+=5;
+    });
+    y+=2;
+  });
+
+  /* Pie de página */
+  const tot=doc.getNumberOfPages();
+  for(let p=1;p<=tot;p++){
+    doc.setPage(p);
+    draw('line'); doc.setLineWidth(0.3); doc.line(M,PH-13,PW-M,PH-13);
+    fuente('normal',7.5,'muted');
+    doc.text(T('HEDMA TECNOCONTROL, S.A. de C.V.   •   '+(r.folio?r.folio+'   •   ':'')+'Generado el '+fLarga(hoy())),M,PH-8.5);
+    doc.text('Página '+p+' de '+tot,PW-M,PH-8.5,{align:'right'});
+  }
+  return doc;
+}
+
+async function descargarPDF(){
+  const b=$('#bPdf'); if(b) b.disabled=true;
+  try{
+    toast('Preparando PDF…');
+    await cargarJsPDF();
+    const r=S.actual, e=r.estacion||{};
+    const acts=[...S.acts].sort((a,b)=>String(a.fecha).localeCompare(String(b.fecha))||String(a.created_at||'').localeCompare(String(b.created_at||'')));
+    const fotos=[]; acts.forEach(a=>(a.fotos||[]).forEach(f=>fotos.push(f)));
+    const img=new Map(), cola=fotos.slice(); let n=0;
+    await Promise.all(Array.from({length:Math.min(4,cola.length)},async()=>{
+      while(cola.length){ const f=cola.shift(); img.set(f, await fotoPDF(f.url)); n++;
+        if(n===fotos.length||n%4===0) toast('Preparando fotos '+n+' de '+fotos.length+'…'); }
+    }));
+    const logo=document.querySelector('.logo-claro')?.src||null;
+    const doc=crearPDF(r,e,acts,img,logo);
+    const nombre=((r.folio?r.folio+' ':'')+(e.nombre||'Reporte')).replace(/[\\/:*?"<>|]+/g,'').trim()+'.pdf';
+    doc.save(nombre);
+    if(fotos.length && [...img.values()].some(v=>!v)) toast('PDF listo. Algunas fotos no se pudieron incluir.', true);
+    else toast('PDF descargado');
+  }catch(err){ toast('No se pudo generar el PDF: '+errTxt(err), true); }
+  finally{ if(b) b.disabled=false; }
 }
 
 async function compartir(){
